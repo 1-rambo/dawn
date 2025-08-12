@@ -118,17 +118,36 @@ Sample(
 Sample(
     NAME ClearScene
     ENABLE_EMSCRIPTEN
-    SOURCES "ClearScene.cpp"
+    SOURCES "scenes/ClearScene.cpp"
 )
 
 # 使用简单方式添加GLM库头文件
 Sample(
     NAME CubeScene
     ENABLE_EMSCRIPTEN
-    SOURCES "CubeScene.cpp"
+    SOURCES "scenes/CubeScene.cpp"
 )
-# 为CubeScene添加包含路径，使其可以找到GLM库头文件
+
+Sample(
+    NAME ShadingScene
+    ENABLE_EMSCRIPTEN
+    SOURCES "scenes/ShadingScene.cpp"
+)
+
+# GPUMark 基准测试程序 - 集成所有场景
+# Sample(
+#     NAME GPUMark
+#     ENABLE_EMSCRIPTEN
+#     SOURCES "scenes/GPUMark.cpp" "scenes/ClearScene.cpp" "scenes/CubeScene.cpp" "scenes/ShadingScene.cpp"
+# )
+
+# 为GPUMark添加编译定义，禁用场景文件中的main函数
+# target_compile_definitions(GPUMark PRIVATE GPUMARK_BUILD)
+
+# 为CubeScene、ShadingScene和GPUMark添加包含路径，使其可以找到GLM库头文件
 target_include_directories(CubeScene PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
+target_include_directories(ShadingScene PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
+# target_include_directories(GPUMark PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
 
 # 添加 gpumark_dawn 子目录
-add_subdirectory(gpumark_dawn)
+# add_subdirectory(gpumark_dawn)

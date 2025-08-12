@@ -29,6 +29,10 @@
 #include <cstdlib>
 #include <vector>
 #include <chrono>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <memory>
 
 #include "dawn/samples/SampleUtils.h"
 
@@ -44,14 +48,68 @@ const int MAX_FRAME_TIME = 1000; // ms
 #include "glm/gtc/type_ptr.hpp"
 
 struct Uniform {
-    alignas(16) glm::mat4 modelView;
     alignas(16) glm::mat4 modelViewProjection;
     alignas(16) glm::mat4 normal;
+    alignas(16) glm::vec4 materialDiffuse;
+    alignas(16) glm::mat4 modelView;
 };
 
-class CubeScene : public SampleBase {
+// 函数用于读取顶点数据文件（文本格式，逗号分隔）
+std::pair<std::vector<float>, size_t> loadVertexDataFromFile(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open vertex data file: " << filename << std::endl;
+        return {{}, 0};
+    }
+    
+    std::vector<float> vertexData;
+    std::string line;
+    
+    // 读取文件的所有内容
+    std::string content;
+    while (std::getline(file, line)) {
+        if (!content.empty()) {
+            content += " ";
+        }
+        content += line;
+    }
+    file.close();
+    
+    // 解析逗号分隔的数值
+    std::stringstream ss(content);
+    std::string token;
+    
+    while (std::getline(ss, token, ',')) {
+        // 移除前后空白字符
+        token.erase(0, token.find_first_not_of(" \t\n\r"));
+        token.erase(token.find_last_not_of(" \t\n\r") + 1);
+        
+        if (!token.empty()) {
+            try {
+                float value = std::stof(token);
+                vertexData.push_back(value);
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing float value: " << token << " - " << e.what() << std::endl;
+            }
+        }
+    }
+    
+    // 每个顶点有6个float（3个position + 3个normal）
+    size_t vertexCount = vertexData.size() / 6;
+    std::cout << "Loaded " << vertexCount << " vertices (" << vertexData.size() << " floats) from " << filename << std::endl;
+    
+    return {vertexData, vertexCount};
+}
+
+class ShadingScene : public SampleBase {
 public:
     using SampleBase::SampleBase;
+    
+    // 添加FPS数据收集接口
+    std::vector<float> GetFPSSamples() const { return fpsSamples; }
+    void ClearFPSSamples() { fpsSamples.clear(); }
+    bool HasEnoughSamples(int targetCount) const { return fpsSamples.size() >= targetCount; }
+    
 private:
     bool SetupImpl() override {
         startTime = std::chrono::steady_clock::now();
@@ -62,17 +120,25 @@ private:
         height = surfaceTexture.texture.GetHeight();
         aspect = static_cast<float>(width) / static_cast<float>(height);
 
-        wgpu::ShaderModule vsModule = dawn::utils::CreateShaderModule(device, R"(
+        glm::vec3 min_bound = {-2.23317, -1.34113, -1.28322};
+        glm::vec3 max_bound = {2.25217, 1.35304, 1.24491};
+        float diameter = glm::distance(min_bound, max_bound);
+        radius = diameter / 2.0f;
+        center = (max_bound + min_bound) / 2.0f;
+        float fovy = 2.0f * atanf(radius / (2.0f + radius));
+        projection = glm::perspective(fovy, aspect, 2.0f, 2.0f + diameter);
+
+        wgpu::ShaderModule Module = dawn::utils::CreateShaderModule(device, R"(
             struct vsIn {
                 @location(0) position : vec3f,
-                @location(1) color : vec3f,
-                @location(2) normal : vec3f,
+                @location(1) normal : vec3f,
             }
 
             struct Uniform {
-                modelview : mat4x4f,
-                modelviewprojection : mat4x4f,
-                normal : mat4x4f,
+                ModelViewProjectionMatrix : mat4x4f,
+                NormalMatrix : mat4x4f,
+                MaterialDiffuse : vec4f,
+                ModelViewMatrix : mat4x4f,
             }
 
             struct vsOutput {
@@ -81,80 +147,44 @@ private:
             }
 
             @group(0) @binding(0) var<uniform> uni : Uniform;
-            //@group(0) @binding(1) var<storage, read_write> data : array<f32>;
 
             @vertex fn vs(vert : vsIn) -> vsOutput
             {
-                const lightSource : vec4f = vec4f(2.0, 2.0, 20.0, 0.0);
-                var position : vec4f = uni.modelviewprojection * vec4f(vert.position, 1.0);
-                var eyeNormal : vec3f = (uni.normal * vec4f(vert.normal, 1.0)).xyz;
-                var position4 : vec4f = uni.modelview * vec4f(vert.position, 1.0);
-                var position3 : vec3f = position4.xyz / position4.w;
-                var lightDir : vec3f = normalize(lightSource.xyz - position3);
-                var diff : f32 = max(0.0, dot(eyeNormal, lightDir));
+                const LightSourcePosition : vec4f = vec4f(20.0, -20.0, 10.0, 1.0);
+                var N : vec3f = normalize((uni.NormalMatrix * vec4f(vert.normal, 1.0)).xyz);
+                var L : vec3f = normalize(LightSourcePosition.xyz);
+                var diffuse : f32 = max(dot(N, L), 0.0);
+                var position : vec4f = uni.ModelViewProjectionMatrix * vec4f(vert.position, 1.0);
                 var vsOut : vsOutput;
-                //vsOut.position = vec4f(position.xyz / 2, position.w);
-                vsOut.position = vec4f(position.xyz / position.w, 1.0);
-                vsOut.position.z = (vsOut.position.z + 1.0) / 2.0;
-                // vsOut.position = position;
-                vsOut.color = vec4f(diff * vert.color, 1.0);
+                vsOut.position = position;
+                vsOut.position.y *= -1.0;
+                // vsOut.position.z *= 0.5;
+                // vsOut.position.z = (vsOut.position.z + 1.0) / 2.0;
+                // 移除Y坐标翻转，保持正常的3D坐标系
+                vsOut.position.z = (vsOut.position.z + vsOut.position.w) * 0.5;
+                vsOut.color = vec4f(diffuse * uni.MaterialDiffuse.rgb, uni.MaterialDiffuse.a);
                 return vsOut;
             }
-        )");
 
-        wgpu::ShaderModule fsModule = dawn::utils::CreateShaderModule(device, R"(
-            struct vsOutput {
-                @builtin(position) position : vec4f,
-                @location(0) color : vec4f,
-            }
             @fragment fn fs(vsOut : vsOutput) -> @location(0) vec4f {
                 return vsOut.color;
             }
         )");
 
-        float vertexData[] = {
-            -1, -1, 1, 0, 0, 1, 0, -1, 0, 
-            -1, 1, 1, 0, 1, 1, 0, 1, 0, 
-            1, 1, 1, 1, 1, 1, 0, 1, 0, 
-            -1, -1, 1, 0, 0, 1, 0, -1, 0, 
-            1, 1, 1, 1, 1, 1, 0, 1, 0, 
-            1, -1, 1, 1, 0, 1, 0, -1, 0, 
-            1, -1, -1, 1, 0, 0, 0, -1, 0, 
-            1, 1, -1, 1, 1, 0, 0, 1, 0, 
-            -1, 1, -1, 0, 1, 0, 0, 1, 0, 
-            1, -1, -1, 1, 0, 0, 0, -1, 0, 
-            -1, 1, -1, 0, 1, 0, 0, 1, 0, 
-            -1, -1, -1, 0, 0, 0, 0, -1, 0, 
-            1, -1, 1, 1, 0, 1, 0, -1, 0, 
-            1, 1, 1, 1, 1, 1, 0, 1, 0, 
-            1, 1, -1, 1, 1, 0, 0, 1, 0, 
-            1, -1, 1, 1, 0, 1, 0, -1, 0, 
-            1, 1, -1, 1, 1, 0, 0, 1, 0, 
-            1, -1, -1, 1, 0, 0, 0, -1, 0, 
-            -1, -1, -1, 0, 0, 0, 0, -1, 0, 
-            -1, 1, -1, 0, 1, 0, 0, 1, 0, 
-            -1, 1, 1, 0, 1, 1, 0, 1, 0, 
-            -1, -1, -1, 0, 0, 0, 0, -1, 0, 
-            -1, 1, 1, 0, 1, 1, 0, 1, 0, 
-            -1, -1, 1, 0, 0, 1, 0, -1, 0, 
-            1, -1, 1, 1, 0, 1, 0, -1, 0, 
-            -1, -1, -1, 0, 0, 0, 0, -1, 0, 
-            -1, -1, 1, 0, 0, 1, 0, -1, 0, 
-            1, -1, 1, 1, 0, 1, 0, -1, 0, 
-            1, -1, -1, 1, 0, 0, 0, -1, 0, 
-            -1, -1, -1, 0, 0, 0, 0, -1, 0, 
-            -1, 1, 1, 0, 1, 1, 0, 1, 0, 
-            -1, 1, -1, 0, 1, 0, 0, 1, 0, 
-            1, 1, -1, 1, 1, 0, 0, 1, 0, 
-            -1, 1, 1, 0, 1, 1, 0, 1, 0, 
-            1, 1, -1, 1, 1, 0, 0, 1, 0, 
-            1, 1, 1, 1, 1, 1, 0, 1, 0
-        };
+        // 从文件加载顶点数据
+        auto [vertexData, vertexCount] = loadVertexDataFromFile("D:\\Study\\PKU\\research_group_mayun\\dawn\\src\\dawn\\samples\\scenes\\shading.data");
+        if (vertexData.empty()) {
+            std::cerr << "Failed to load vertex data, using empty buffer" << std::endl;
+            return false;
+        }
+        
+        // 存储顶点数量供渲染时使用
+        this->vertexCount = vertexCount;
 
         vertexBuffer = dawn::utils::CreateBufferFromData(
             device,
-            vertexData,
-            sizeof(vertexData),
+            vertexData.data(),
+            vertexData.size() * sizeof(float),
             wgpu::BufferUsage::Vertex
         );
         wgpu::BufferDescriptor bufferDesc;
@@ -163,7 +193,7 @@ private:
         uniformBuffer = device.CreateBuffer(&bufferDesc);
 
         wgpu::BindGroupLayout bgl = dawn::utils::MakeBindGroupLayout(
-            device, {{0, wgpu::ShaderStage::Vertex, wgpu::BufferBindingType::Uniform}}
+            device, {{0, wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment, wgpu::BufferBindingType::Uniform}}
         );
         bindGroup = dawn::utils::MakeBindGroup(
             device, bgl,
@@ -180,24 +210,21 @@ private:
 
         dawn::utils::ComboRenderPipelineDescriptor descriptor;
         descriptor.layout = dawn::utils::MakeBasicPipelineLayout(device, &bgl);
-        descriptor.vertex.module = vsModule;
-        // descriptor.vertex.entryPoint = "vs";
+        descriptor.vertex.module = Module;
+        descriptor.vertex.entryPoint = "vs";
         descriptor.vertex.bufferCount = 1;
 
-        descriptor.cBuffers[0].arrayStride = sizeof(float) * 9; // 3 for position, 3 for color, 3 for normal
-        descriptor.cBuffers[0].attributeCount = 3;
+        descriptor.cBuffers[0].arrayStride = sizeof(float) * 6; // 3 for position, 3 for color, 3 for normal
+        descriptor.cBuffers[0].attributeCount = 2;
         descriptor.cAttributes[0].format = wgpu::VertexFormat::Float32x3; // position
         descriptor.cAttributes[1].format = wgpu::VertexFormat::Float32x3; // color
-        descriptor.cAttributes[2].format = wgpu::VertexFormat::Float32x3; // normal
         descriptor.cAttributes[0].offset = 0;
         descriptor.cAttributes[1].offset = sizeof(float) * 3; // color starts
-        descriptor.cAttributes[2].offset = sizeof(float) * 6; // normal starts
         descriptor.cAttributes[0].shaderLocation = 0; // position
         descriptor.cAttributes[1].shaderLocation = 1; // color
-        descriptor.cAttributes[2].shaderLocation = 2; // normal
 
-        descriptor.cFragment.module = fsModule;
-        // descriptor.cFragment.entryPoint = "fs";
+        descriptor.cFragment.module = Module;
+        descriptor.cFragment.entryPoint = "fs";
         descriptor.cTargets[0].format = GetPreferredSurfaceTextureFormat();
 
         wgpu::DepthStencilState depthStencilState = {};
@@ -205,15 +232,6 @@ private:
         depthStencilState.depthWriteEnabled = true;
         depthStencilState.depthCompare = wgpu::CompareFunction::Less;
         descriptor.depthStencil = &depthStencilState;
-
-        // descriptor.cDepthStencil.depthWriteEnabled = true;
-        // descriptor.cDepthStencil.depthCompare = wgpu::CompareFunction::Less;
-        // descriptor.cDepthStencil.format = wgpu::TextureFormat::Depth24PlusStencil8;
-        // wgpu::DepthStencilState depthStencilState = {};
-        // depthStencilState.format = wgpu::TextureFormat::Depth24PlusStencil8;
-        // depthStencilState.depthWriteEnabled = true;
-        // depthStencilState.depthCompare = wgpu::CompareFunction::Less;
-        // descriptor.depthStencil = &depthStencilState;
 
         pipeline = device.CreateRenderPipeline(&descriptor);
 
@@ -228,7 +246,7 @@ private:
         colorAttachment.view = surfaceTexture.texture.CreateView();
         colorAttachment.loadOp = wgpu::LoadOp::Clear;
         colorAttachment.storeOp = wgpu::StoreOp::Store;
-        colorAttachment.clearValue = {0.2f, 0.2f, 0.2f, 1.0f}; 
+        colorAttachment.clearValue = {0.0f, 0.0f, 0.0f, 1.0f}; 
         renderPassDesc.colorAttachmentCount = 1;
         renderPassDesc.colorAttachments = &colorAttachment;
     
@@ -243,17 +261,6 @@ private:
         // depthStencilAttachment.stencilClearValue = 0;
         renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
 
-        // renderPass.cColorAttachments[0].view = surfaceTexture.texture.CreateView();
-        // renderPass.cColorAttachments[0].clearValue = {0.2f, 0.2f, 0.2f, 1.0f};
-        // renderPass.cColorAttachments[0].loadOp = wgpu::LoadOp::Clear;
-        // renderPass.cColorAttachments[0].storeOp = wgpu::StoreOp::Store;
-        // renderPass.cDepthStencilAttachmentInfo.depthClearValue = 1.0f;
-        // renderPass.cDepthStencilAttachmentInfo.depthLoadOp = wgpu::LoadOp::Clear;
-        // renderPass.cDepthStencilAttachmentInfo.depthStoreOp = wgpu::StoreOp::Store;
-        // renderPass.cDepthStencilAttachmentInfo.stencilLoadOp = wgpu::LoadOp::Clear;
-        // renderPass.cDepthStencilAttachmentInfo.stencilStoreOp = wgpu::StoreOp::Store;
-        // renderPass.cDepthStencilAttachmentInfo.view = depthTexture.CreateView();
-
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         {
             wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPassDesc);
@@ -261,7 +268,7 @@ private:
             pass.SetBindGroup(0, bindGroup);
             pass.SetVertexBuffer(0, vertexBuffer);
             pass.SetViewport(0, 0, width, height, 0, 1);
-            pass.Draw(36, 1, 0, 0); // 36 vertices
+            pass.Draw(vertexCount, 1, 0, 0); // 从文件加载的顶点数量
             pass.End();
         }
 
@@ -273,14 +280,19 @@ private:
 
     void UpdateUniformBuffer() {
         Uniform ubo = {
-            glm::mat4(1.0f), // modelView
             glm::mat4(1.0f), // modelViewProjection
-            glm::mat4(1.0f)  // normal
+            glm::mat4(1.0f), // normal
+            glm::vec4(0.0f),     // materialDiffuse
+            glm::mat4(1.0f), // modelView
         };
-        ubo.modelView = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -8.0f));
-        ubo.modelView = glm::rotate(ubo.modelView, glm::radians(rotation[0]), {1.0f, 0.0f, 0.0f});
-        ubo.modelView = glm::rotate(ubo.modelView, glm::radians(rotation[1]), {0.0f, 1.0f, 0.0f});
-        ubo.modelView = glm::rotate(ubo.modelView, glm::radians(rotation[2]), {0.0f, 0.0f, 1.0f});
+        glm::mat4 modelView = glm::mat4(1.0f);
+        modelView = glm::translate(modelView, glm::vec3{-center.x, -center.y, -(center.z + 2.0 + radius)});
+        modelView = glm::rotate(modelView, glm::radians(rotation), {0.0f, 1.0f, 0.0f});
+
+        ubo.modelViewProjection = projection * modelView;
+        ubo.normal = glm::transpose(glm::inverse(modelView));
+        ubo.materialDiffuse = glm::vec4{0.0f, 0.0f, 0.7f, 1.0f};
+        ubo.modelView = modelView;
 
         // auto const projection = glm::frustum(-2.8f, 2.8f, -2.8f * aspect, 2.8f * aspect, 6.0f, 10.0f);
         auto const projection = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
@@ -292,10 +304,8 @@ private:
         queue.WriteBuffer(uniformBuffer, 0, &ubo, sizeof(ubo));
 
         auto now = std::chrono::steady_clock::now();
-        float time = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count() / 5;
-        rotation[0] = 45 + 0.25f * time;
-        rotation[1] = 45 + 0.5f * time;
-        rotation[2] = 10 + 0.1f * time; 
+        float time = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count() / 1000.0f;
+        rotation = 36.0f * time; // 每秒旋转36度
     }
 
     void update() {
@@ -312,6 +322,10 @@ private:
         if (lastFrameCount >= MAX_FRAME_COUNT || elapsed >= MAX_FRAME_TIME) {
             float fps = lastFrameCount / (elapsed / 1000.0f);
             printf("FPS: %.3f\n", fps);
+            
+            // 收集FPS样本
+            fpsSamples.push_back(fps);
+            
             lastFrameTime = now;
             lastFrameCount = 0;
         }
@@ -322,20 +336,30 @@ private:
     wgpu::BindGroup bindGroup;
     wgpu::Buffer vertexBuffer;
     wgpu::Buffer uniformBuffer;
+    uint32_t vertexCount = 0;  // 顶点数量
     wgpu::Texture depthTexture;
     std::chrono::steady_clock::time_point startTime;
     std::chrono::steady_clock::time_point lastFrameTime;
     int lastFrameCount = 0;
     uint32_t width, height;
-    float aspect;
-    float rotation[3] = {45, 45, 10};
+    float aspect, radius, rotation{0};
+    glm::vec3 center;
+    glm::mat4 projection;
+    std::vector<float> fpsSamples;  // FPS数据收集
 };
 
+// 创建场景函数，供GPUMark调用
+std::unique_ptr<SampleBase> CreateShadingScene() {
+    return std::make_unique<ShadingScene>();
+}
+
+#ifndef GPUMARK_BUILD
 int main(int argc, const char* argv[]) {
     if (!InitSample(argc, argv)) {
         return 1;
     }
 
-    CubeScene* sample = new CubeScene();
+    ShadingScene* sample = new ShadingScene();
     sample->Run(0);
 }
+#endif

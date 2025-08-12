@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <vector>
 #include <chrono>
+#include <memory>
 
 #include "dawn/samples/SampleUtils.h"
 
@@ -42,6 +43,12 @@ const int MAX_FRAME_TIME = 1000; // ms
 class ClearScene : public SampleBase {
 public:
     using SampleBase::SampleBase;
+    
+    // 添加FPS数据收集接口
+    std::vector<float> GetFPSSamples() const { return fpsSamples; }
+    void ClearFPSSamples() { fpsSamples.clear(); }
+    bool HasEnoughSamples(int targetCount) const { return fpsSamples.size() >= targetCount; }
+    
 private:
     bool SetupImpl() override {
         startTime = std::chrono::steady_clock::now();
@@ -106,6 +113,10 @@ private:
         if (lastFrameCount >= MAX_FRAME_COUNT || elapsed >= MAX_FRAME_TIME) {
             float fps = lastFrameCount / (elapsed / 1000.0f);
             printf("FPS: %.3f\n", fps);
+            
+            // 收集FPS样本
+            fpsSamples.push_back(fps);
+            
             lastFrameTime = now;
             lastFrameCount = 0;
         }
@@ -116,8 +127,15 @@ private:
     std::chrono::steady_clock::time_point startTime;
     std::chrono::steady_clock::time_point lastFrameTime;
     int lastFrameCount = 0;
+    std::vector<float> fpsSamples;  // FPS数据收集
 };
 
+// 创建场景函数，供GPUMark调用
+std::unique_ptr<SampleBase> CreateClearScene() {
+    return std::make_unique<ClearScene>();
+}
+
+#ifndef GPUMARK_BUILD
 int main(int argc, const char* argv[]) {
     if (!InitSample(argc, argv)) {
         return 1;
@@ -126,3 +144,4 @@ int main(int argc, const char* argv[]) {
     ClearScene* sample = new ClearScene();
     sample->Run(0);
 }
+#endif
