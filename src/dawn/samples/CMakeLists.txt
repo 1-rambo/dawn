@@ -114,3 +114,21 @@ Sample(
     NAME ManualSurfaceTest
     SOURCES "ManualSurfaceTest.cpp"
 )
+
+Sample(
+    NAME ClearScene
+    ENABLE_EMSCRIPTEN
+    SOURCES "ClearScene.cpp"
+)
+
+# 使用简单方式添加GLM库头文件
+Sample(
+    NAME CubeScene
+    ENABLE_EMSCRIPTEN
+    SOURCES "CubeScene.cpp"
+)
+# 为CubeScene添加包含路径，使其可以找到GLM库头文件
+target_include_directories(CubeScene PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
+
+# 添加 gpumark_dawn 子目录
+add_subdirectory(gpumark_dawn)

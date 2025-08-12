@@ -82,6 +82,7 @@ ComboRenderPassDescriptor::ComboRenderPassDescriptor(
     cDepthStencilAttachmentInfo.stencilLoadOp = wgpu::LoadOp::Clear;
     cDepthStencilAttachmentInfo.stencilStoreOp = wgpu::StoreOp::Store;
 
+    
     colorAttachmentCount = colorAttachmentInfo.size();
     uint32_t colorAttachmentIndex = 0;
     for (const wgpu::TextureView& colorAttachment : colorAttachmentInfo) {

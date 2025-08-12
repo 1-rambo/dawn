@@ -55,8 +55,8 @@ class HelloTriangleSample : public SampleBase {
     )");
 
         dawn::utils::ComboRenderPipelineDescriptor descriptor;
-        descriptor.layout = nullptr;
-        descriptor.vertex.module = module;
+        descriptor.layout = nullptr;        // layout: 'auto'
+        descriptor.vertex.module = module;  // 
         descriptor.vertex.bufferCount = 1;
         descriptor.cBuffers[0].arrayStride = 4 * sizeof(float);
         descriptor.cBuffers[0].attributeCount = 1;
