@@ -33,9 +33,6 @@
 #include <iostream>
 #include <sstream>
 #include <memory>
-#include <string>
-#include <map>
-#include <iomanip> // 用于格式化输出
 
 #include "dawn/samples/SampleUtils.h"
 
@@ -49,94 +46,6 @@ const int MAX_FRAME_TIME = 1000; // ms
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtc/type_ptr.hpp"
-
-// 性能分析计时器类
-class PerformanceTimer {
-public:
-    // 预先添加一个计时器（初始化但不开始计时）
-    void addTimer(const std::string& name) {
-        if (events.find(name) == events.end()) {
-            events[name] = EventStats();
-        }
-    }
-    
-    // 开始计时一个命名事件
-    void start(const std::string& name) {
-        events[name].startTime = std::chrono::high_resolution_clock::now();
-    }
-    
-    // 结束一个命名事件的计时
-    void end(const std::string& name) {
-        auto now = std::chrono::high_resolution_clock::now();
-        auto& event = events[name];
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - event.startTime).count() / 1000.0;
-        
-        // 更新统计信息
-        event.count++;
-        event.totalTime += duration;
-        event.minTime = std::min(event.minTime, duration);
-        event.maxTime = std::max(event.maxTime, duration);
-    }
-    
-    // 打印所有事件的性能数据
-    void printStats() {
-        std::cout << "\n===== Performance Statistics =====" << std::endl;
-        std::cout << std::left << std::setw(25) << "Event" 
-                  << std::setw(12) << "Avg (ms)" 
-                  << std::setw(12) << "Min (ms)" 
-                  << std::setw(12) << "Max (ms)" 
-                  << std::setw(10) << "Calls" 
-                  << std::setw(12) << "Total (ms)" 
-                  << std::setw(12) << "% of Frame" << std::endl;
-        std::cout << std::string(90, '-') << std::endl;
-        
-        // 找到"Frame"事件以计算百分比
-        double totalFrameTime = 0.0;
-        auto frameIt = events.find("Frame");
-        if (frameIt != events.end() && frameIt->second.count > 0) {
-            totalFrameTime = frameIt->second.totalTime;
-        }
-        
-        // 按名称排序显示事件
-        std::vector<std::string> eventNames;
-        for (const auto& [name, _] : events) {
-            eventNames.push_back(name);
-        }
-        std::sort(eventNames.begin(), eventNames.end());
-        
-        for (const auto& name : eventNames) {
-            const auto& event = events[name];
-            double avg = event.count > 0 ? event.totalTime / event.count : 0;
-            double percentOfFrame = totalFrameTime > 0 ? (event.totalTime / totalFrameTime) * 100.0 : 0.0;
-            
-            std::cout << std::left << std::setw(25) << name 
-                      << std::fixed << std::setprecision(4)
-                      << std::setw(12) << avg
-                      << std::setw(12) << (event.minTime != std::numeric_limits<double>::max() ? event.minTime : 0.0)
-                      << std::setw(12) << event.maxTime
-                      << std::setw(10) << event.count
-                      << std::setw(12) << event.totalTime
-                      << std::setw(12) << percentOfFrame << "%" << std::endl;
-        }
-        std::cout << "==============================\n" << std::endl;
-    }
-    
-    // 重置所有统计数据
-    void reset() {
-        events.clear();
-    }
-    
-private:
-    struct EventStats {
-        std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
-        double totalTime = 0.0;
-        double minTime = std::numeric_limits<double>::max();
-        double maxTime = 0.0;
-        int count = 0;
-    };
-    
-    std::map<std::string, EventStats> events;
-};
 
 struct Uniform {
     alignas(16) glm::mat4 modelViewProjection;
@@ -201,41 +110,15 @@ public:
     void ClearFPSSamples() { fpsSamples.clear(); }
     bool HasEnoughSamples(int targetCount) const { return fpsSamples.size() >= targetCount; }
     
-    // 性能统计报告方法
-    void PrintPerformanceStats() {
-        performanceTimer.printStats();
-    }
-    
 private:
     bool SetupImpl() override {
-        // 初始化计时器
-        performanceTimer.reset();
-        
-        // 添加所有要跟踪的性能事件
-        const std::vector<std::string> timerEvents = {
-            "SetupImpl", "GetSurfaceTexture", "LoadVertexData", 
-            "CreateVertexBuffer", "CreateUniformBuffer", "CreateBindGroup",
-            "CreateRenderPipeline", "Frame", "BeginRenderPass", "RenderPass",
-            "EndRenderPass", "UpdateUniformBuffer", "WriteBuffer",
-            "FinishAndSubmit", "CreateCommandEncoder", "SetupRenderPass"
-        };
-        
-        for (const auto& event : timerEvents) {
-            performanceTimer.addTimer(event);
-        }
-        
-        // 开始初始化过程计时
-        performanceTimer.start("SetupImpl");
-        
         startTime = std::chrono::steady_clock::now();
 
-        performanceTimer.start("GetSurfaceTexture");
         wgpu::SurfaceTexture surfaceTexture;
         surface.GetCurrentTexture(&surfaceTexture);
         width = surfaceTexture.texture.GetWidth();
         height = surfaceTexture.texture.GetHeight();
         aspect = static_cast<float>(width) / static_cast<float>(height);
-        performanceTimer.end("GetSurfaceTexture");
 
         glm::vec3 min_bound = {-2.23317, -1.34113, -1.28322};
         glm::vec3 max_bound = {2.25217, 1.35304, 1.24491};
@@ -289,35 +172,26 @@ private:
         )");
 
         // 从文件加载顶点数据
-        performanceTimer.start("LoadVertexData");
         auto [vertexData, vertexCount] = loadVertexDataFromFile("D:\\Study\\PKU\\research_group_mayun\\dawn\\src\\dawn\\samples\\scenes\\shading.data");
         if (vertexData.empty()) {
             std::cerr << "Failed to load vertex data, using empty buffer" << std::endl;
-            performanceTimer.end("LoadVertexData");
             return false;
         }
-        performanceTimer.end("LoadVertexData");
         
         // 存储顶点数量供渲染时使用
         this->vertexCount = vertexCount;
 
-        performanceTimer.start("CreateVertexBuffer");
         vertexBuffer = dawn::utils::CreateBufferFromData(
             device,
             vertexData.data(),
             vertexData.size() * sizeof(float),
             wgpu::BufferUsage::Vertex
         );
-        performanceTimer.end("CreateVertexBuffer");
-        
-        performanceTimer.start("CreateUniformBuffer");
         wgpu::BufferDescriptor bufferDesc;
         bufferDesc.size = sizeof(Uniform);
         bufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
         uniformBuffer = device.CreateBuffer(&bufferDesc);
-        performanceTimer.end("CreateUniformBuffer");
 
-        performanceTimer.start("CreateBindGroup");
         wgpu::BindGroupLayout bgl = dawn::utils::MakeBindGroupLayout(
             device, {{0, wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment, wgpu::BufferBindingType::Uniform}}
         );
@@ -327,7 +201,6 @@ private:
                 {0, uniformBuffer, 0, sizeof(Uniform)},
             }
         );
-        performanceTimer.end("CreateBindGroup");
 
         wgpu::TextureDescriptor depthTextureDesc;
         depthTextureDesc.size = {width, height, 1};
@@ -335,7 +208,6 @@ private:
         depthTextureDesc.usage = wgpu::TextureUsage::RenderAttachment;
         depthTexture = device.CreateTexture(&depthTextureDesc);
 
-        performanceTimer.start("CreateRenderPipeline");
         dawn::utils::ComboRenderPipelineDescriptor descriptor;
         descriptor.layout = dawn::utils::MakeBasicPipelineLayout(device, &bgl);
         descriptor.vertex.module = Module;
@@ -362,24 +234,13 @@ private:
         descriptor.depthStencil = &depthStencilState;
 
         pipeline = device.CreateRenderPipeline(&descriptor);
-        performanceTimer.end("CreateRenderPipeline");
-        
-        // 结束整个Setup的计时
-        performanceTimer.end("SetupImpl");
-        
+
         return true;
     }
 
     void FrameImpl() override {
-        frameCount++; // 增加帧计数器
-        performanceTimer.start("Frame");
-        
-        performanceTimer.start("GetSurfaceTexture");
         wgpu::SurfaceTexture surfaceTexture;
         surface.GetCurrentTexture(&surfaceTexture);
-        performanceTimer.end("GetSurfaceTexture");
-        
-        performanceTimer.start("SetupRenderPass");
         wgpu::RenderPassDescriptor renderPassDesc = {};
         wgpu::RenderPassColorAttachment colorAttachment = {};
         colorAttachment.view = surfaceTexture.texture.CreateView();
@@ -400,48 +261,24 @@ private:
         // depthStencilAttachment.stencilClearValue = 0;
         renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
 
-        performanceTimer.end("SetupRenderPass");
-        
-        performanceTimer.start("CreateCommandEncoder");
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-        performanceTimer.end("CreateCommandEncoder");
-        
         {
-            performanceTimer.start("BeginRenderPass");
             wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPassDesc);
-            performanceTimer.end("BeginRenderPass");
-            
-            performanceTimer.start("RenderPass");
             pass.SetPipeline(pipeline);
             pass.SetBindGroup(0, bindGroup);
             pass.SetVertexBuffer(0, vertexBuffer);
             pass.SetViewport(0, 0, width, height, 0, 1);
             pass.Draw(vertexCount, 1, 0, 0); // 从文件加载的顶点数量
-            performanceTimer.end("RenderPass");
-            
-            performanceTimer.start("EndRenderPass");
             pass.End();
-            performanceTimer.end("EndRenderPass");
         }
 
-        performanceTimer.start("FinishAndSubmit");
         wgpu::CommandBuffer commands = encoder.Finish();
         queue.Submit(1, &commands);
-        performanceTimer.end("FinishAndSubmit");
 
         update();
-        
-        performanceTimer.end("Frame");
-        
-        // 每100帧打印一次性能统计信息
-        if (frameCount % 100 == 0) {
-            PrintPerformanceStats();
-        }
     }
 
     void UpdateUniformBuffer() {
-        performanceTimer.start("UpdateUniformBuffer");
-        
         Uniform ubo = {
             glm::mat4(1.0f), // modelViewProjection
             glm::mat4(1.0f), // normal
@@ -464,23 +301,16 @@ private:
         ubo.normal = glm::transpose(glm::inverse(ubo.modelView));
 
         // 更新uniform缓冲区
-        performanceTimer.start("WriteBuffer");
         queue.WriteBuffer(uniformBuffer, 0, &ubo, sizeof(ubo));
-        performanceTimer.end("WriteBuffer");
 
         auto now = std::chrono::steady_clock::now();
         float time = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count() / 1000.0f;
         rotation = 36.0f * time; // 每秒旋转36度
-        
-        performanceTimer.end("UpdateUniformBuffer");
     }
 
     void update() {
         // printf("rotation: [%f, %f, %f]\n", rotation[0], rotation[1], rotation[2]);
-        performanceTimer.start("UpdateFPS");
         updateFPS();
-        performanceTimer.end("UpdateFPS");
-        
         // 更新uniform数据
         UpdateUniformBuffer();
     }
@@ -516,8 +346,6 @@ private:
     glm::vec3 center;
     glm::mat4 projection;
     std::vector<float> fpsSamples;  // FPS数据收集
-    PerformanceTimer performanceTimer; // 性能分析计时器
-    int frameCount = 0; // 帧计数器，用于定期打印性能统计
 };
 
 // 创建场景函数，供GPUMark调用
@@ -533,10 +361,5 @@ int main(int argc, const char* argv[]) {
 
     ShadingScene* sample = new ShadingScene();
     sample->Run(0);
-    
-    // 在程序结束前打印最终性能统计
-    sample->PrintPerformanceStats();
-    delete sample;
 }
 #endif
-

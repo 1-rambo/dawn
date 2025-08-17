@@ -93,30 +93,28 @@ emcc HelloTriangle.cpp SampleUtils.cpp \
 Tips: 如果后端使用 `--vulkan` 可取消 fps 限制，默认后端为 `--d3d12`
 
 **1. 主要代码翻译：以 WebGPU Buffer 创建为例**
-```cpp
+```
 // HelloTriangle.cpp
 vertexBuffer = dawn::utils::CreateBufferFromData(device, vertexData, sizeof(vertexData), wgpu::BufferUsage::Vertex);
 
 // Dawn 转换过程
 1. 应用层调用
-   wgpu::Device::CreateBuffer()
-   ↓ [C++ wrapper, 生成代码]
+   wgpu::Device::CreateBuffer(BufferDescriptor const * descriptor)
+   ↓ [C++ wrapper, 位于 webgpu_cpp.h, 生成代码]
 2. C API 调用  
-   wgpuDeviceCreateBuffer(device, descriptor)
-   ↓ [dawn_proc.cpp, 生成代码]
+   wgpuDeviceCreateBuffer(Get(), reinterpret_cast<WGPUBufferDescriptor const *>(descriptor))
+   ↓ [位于 webgpu_cpp.cpp, 生成代码]
 3. 函数指针分发
    procs.deviceCreateBuffer(device, descriptor)
-   ↓ [函数指针表，运行时分发]
+   ↓ [由 dawn_proc.cpp 模板经 jinja2 生成函数指针表，运行时分发]
+   [其中 procs 是全局函数表，通过调用 dawnProcSetProcs 函数实现，这个函数的绑定根据不同环境有不同实现，native 环境下它绑定到 DawnNative.cpp 中]
 4. Native 实现入口
    NativeDeviceCreateBuffer(cSelf, descriptor)
-   ↓ [ProcTable.cpp, 生成代码]
+   ↓ [由 ProcTable.cpp 模板经 jinja2 生成代码，在 out/Release/gen/src/native/ProcTable.cpp 中]
 5. 类型转换 + 调用
    self->APICreateBuffer(descriptor_)
-   ↓ [类型转换：WGPUDevice → DeviceBase*]
-6. Dawn Native 前端
-   DeviceBase::APICreateBuffer()
-   ↓ [Device.cpp, 验证和分发]
-7. 后端虚函数分发
+   ↓ [即 DeviceBase::APICreateBuffer，在 Device.cpp 中]
+6. 后端虚函数分发
    CreateBufferImpl(descriptor)
    ↓ [虚函数，根据后端类型分发]
 8. 后端具体实现
@@ -128,6 +126,8 @@ vertexBuffer = dawn::utils::CreateBufferFromData(device, vertexData, sizeof(vert
 
 Q: 如何选择的后端类型？
 A: `Device::CreateBuffer()` 里调用的 `Get()` 函数决定了后端的具体类型。深层次地来看，后端类型选择发生在设备创建时，具体在 `InstanceBase::EnumeratePhysicalDevices()` 中。`Get()` 函数只是返回已经创建好的 C API 句柄。
+Q: 很多调用没有找到函数实现，是为什么？
+A: 许多代码通过 jinja2 模板生成相关代码
 
 **后端选择的真正时机：**
 1. `wgpuInstanceRequestAdapter()` 调用时
@@ -165,3 +165,38 @@ Dawn Native (src/dawn/native/)
 
 #### dawn_json_generator.py
 用于将 dawn.json 转换为内存形式代码，提供给 jinja2 模板，生成各种代码（头文件、Wire协议代码等等）
+
+### 代码生成系统：模板与生成文件对应关系
+
+Dawn使用Jinja2模板引擎和dawn_json_generator.py脚本来生成代码。以下是主要模板与生成文件的对应关系：
+
+| 模板文件 | 生成文件 | 功能描述 |
+|---------|---------|---------|
+| generator/templates/dawn/native/ProcTable.cpp | - | 生成Native的实现入口 |
+| generator/templates/dawn/native/api_dawn_native_proc.cpp | src/dawn/native/webgpu_dawn_native_proc.cpp | 生成WebGPU Native的C API入口，包含`NativeDeviceCreateBuffer`等函数 |
+| generator/templates/dawn/dawn_proc.cpp | src/dawn/dawn_proc.cpp | 生成全局函数指针表和`wgpuDeviceCreateBuffer`等函数 |
+| generator/templates/dawn/dawn_thread_dispatch_proc.cpp | src/dawn/dawn_thread_dispatch_proc.cpp | 生成线程分发相关代码 |
+
+#### 代码生成目标
+
+dawn_json_generator.py支持多个生成目标（targets）：
+
+- **proc**: 生成dawn_proc.cpp和dawn_thread_dispatch_proc.cpp
+- **webgpu_dawn_native_proc**: 生成webgpu_dawn_native_proc.cpp
+- **cpp_headers**: 生成C++ API头文件
+- **dawn_headers**: 生成Dawn C API头文件
+- **wire**: 生成Dawn Wire协议代码
+- **native_utils**: 生成Dawn Native工具代码
+
+#### 生成命令示例
+
+以下命令可以生成Dawn Native的接口代码：
+```bash
+python generator/dawn_json_generator.py --dawn-json src/dawn/dawn.json --wire-json src/dawn/dawn_wire.json --template-dir generator/templates --output-dir generated_files --targets webgpu_dawn_native_proc
+```
+
+#### webgpu_cpp.h
+由 dawn.json 文件生成，作为 C++ WebGPU 头文件
+文件中声明定义了许多实体类，如 `Device`, `Pipeline` 等等，它们都继承自 `ObjectBase` 模板类。
+具体而言，它是一个 CRTP 模式的基类，供所有子类继承，除了 `Derived` 模板参数外，它还有 `CType` 模板参数，用于C风格的对应指针参数传递。
+例如，`class Device : public ObjectBase<Device, WGPUDevice>`

@@ -38,7 +38,8 @@
 #include "dawn/utils/WGPUHelpers.h"
 
 const int MAX_FRAME_COUNT = 256;
-const int MAX_FRAME_TIME = 1000; // ms
+const int MAX_FRAME_TIME = 200; // 缩短测量间隔到200ms，更频繁测量FPS
+// const bool PRINT_FPS = false; // 控制是否打印FPS到控制台
 
 class ClearScene : public SampleBase {
 public:
@@ -78,40 +79,37 @@ private:
     void update() {
         updateFPS();
 
-        auto now = std::chrono::steady_clock::now();
-        float elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - startTime).count() / 1000000.0f;
-        // printf("Elapsed time: %lf seconds\n", elapsed);
-        // if (frameCount % 60 == 0) {
-        //     printf("FPS: %lf\n", 60.0 / timerForFPS->GetElapsedTime());
-        //     timerForFPS->Start();
-        // }
-        float period = 5.0;
-        float c = 1.0f;
-        float h = fmod(elapsed / period * 6.0f, 6.0f);
-        float x = c * (1 - fabs(fmod(h, 2.0f) - 1));
-        float r = 0.0f, g = 0.0f, b = 0.0f;
-        switch (int(h)) {
-            case 0: r = c; g = x; b = 0; break;
-            case 1: r = x; g = c; b = 0; break;
-            case 2: r = 0; g = c; b = x; break;
-            case 3: r = 0; g = x; b = c; break;
-            case 4: r = x; g = 0; b = c; break;
-            case 5: r = c; g = 0; b = x; break;
-            default: r = 0; g = 0; b = 0; break;
+        // 减少不必要的HSV计算，只有每30帧才更新一次颜色
+        if (lastFrameCount % 30 == 0) {
+            auto now = std::chrono::steady_clock::now();
+            float elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - startTime).count() / 1000000.0f;
+            float period = 5.0;
+            float c = 1.0f;
+            float h = fmod(elapsed / period * 6.0f, 6.0f);
+            float x = c * (1 - fabs(fmod(h, 2.0f) - 1));
+            float r = 0.0f, g = 0.0f, b = 0.0f;
+            switch (int(h)) {
+                case 0: r = c; g = x; b = 0; break;
+                case 1: r = x; g = c; b = 0; break;
+                case 2: r = 0; g = c; b = x; break;
+                case 3: r = 0; g = x; b = c; break;
+                case 4: r = x; g = 0; b = c; break;
+                case 5: r = c; g = 0; b = x; break;
+                default: r = 0; g = 0; b = 0; break;
+            }
+            clearColor[0] = r;
+            clearColor[1] = g;
+            clearColor[2] = b;
+            clearColor[3] = 1.0f;  // Alpha channel
         }
-        clearColor[0] = r;
-        clearColor[1] = g;
-        clearColor[2] = b;
-        clearColor[3] = 1.0f;  // Alpha channel
-        // printf("Clear color: R=%.2f, G=%.2f, B=%.2f, A=%.2f\n", clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
     }
 
     void updateFPS() {
         lastFrameCount++;
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFrameTime).count();
-        if (lastFrameCount >= MAX_FRAME_COUNT || elapsed >= MAX_FRAME_TIME) {
-            float fps = lastFrameCount / (elapsed / 1000.0f);
+        if ( elapsed >= MAX_FRAME_TIME) {
+            float fps = lastFrameCount * 1000.0f / elapsed;
             printf("FPS: %.3f\n", fps);
             
             // 收集FPS样本
